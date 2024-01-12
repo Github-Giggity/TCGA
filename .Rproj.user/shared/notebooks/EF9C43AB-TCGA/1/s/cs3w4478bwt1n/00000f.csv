@@ -1,0 +1,3 @@
+"0","gene_metadata<-as.data.frame(rowData(luad_data))"
+"0","coldata<-as.data.frame(colData(luad_data))"
+"0",""

@@ -1,0 +1,202 @@
+---
+title: "TCGA"
+format: pdf
+Author: Arisachi Tanaka
+---
+
+```{r}
+##loaded'em up using library
+library(TCGAbiolinks)
+library(tidyverse)
+library(maftools)
+library(pheatmap)
+library(SummarizedExperiment)
+library(survminer)
+library(survival)
+library(DESeq2)
+##overview of all the projects
+
+proj<-getGDCprojects()
+##gives you overview summary of each of the specific project
+getProjectSummary('TCGA-LUAD')
+
+##getting clinical data for TCGA-LUAD
+##which column has these characteristics we want
+##this is important to identify is it dead, alive,
+##time to death
+##GDCquery_clinic to directly go to clinical trial query
+##days to death # of day from initial diagnosis to death
+##days to last follow up # of day from initial diagnosis
+##to last visit/update
+##vital status u dead or alive?
+luad<-GDCquery_clinic("TCGA-LUAD")
+##any columns that has these names?? T/F
+##vital_status tells you alive or dead
+any(colnames(luad)%in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+##which columns does it?
+which(colnames(luad)%in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+
+```
+
+
+```{r}
+##display those columns??
+luad[,c(9,40,46)]
+##use table to identify how many is alive and dead
+table(luad$vital_status)
+
+
+
+```
+
+```{r}
+##using if else to make alive false dead true
+##because alive ones we have to "censor"
+luad$dead<-ifelse(luad$vital_status=="Alive", FALSE, TRUE)
+
+##table to get summary
+table(luad$dead)
+
+##this is so that alive category is given
+##to people who dropped out and dead ones are dead
+luad$status<-ifelse(luad$vital_status=="Alive", luad$days_to_last_follow_up, luad$days_to_death)
+
+```
+
+```{r}
+##gonna create a proper query now before download
+
+luad_query=GDCquery(project = "TCGA-LUAD", data.category="Transcriptome Profiling", experimental.strategy="RNA-Seq", workflow.type="STAR - Counts", data.type="Gene Expression Quantification", access="open", sample.type="Primary Tumor")
+##get results to see the files before hand to confirm 
+##before downloading
+luad_output<-getResults(luad_query)
+##download
+GDCdownload(luad_query)
+
+
+```
+
+
+
+```{r}
+##extract the data with gdcprepare
+##and summarizedexperiment TRUE to save
+##these are the countsdata
+luad_data<-GDCprepare(luad_query, summarizedExperiment = TRUE)
+##create matrix with assay and make it unstranded
+luad_matrix<-assay(luad_data, "unstranded")
+
+```
+
+```{r}
+##that matrix showed that gene is in the row save it as data frame
+##also save column data which was individual entry
+gene_metadata<-as.data.frame(rowData(luad_data))
+coldata<-as.data.frame(colData(luad_data))
+
+```
+
+
+```{r}
+##variance stabilization transformation
+##transforms counts to be used in survival analysis
+##useDESeq2
+##we need countdata as matrix
+##and coldata because we are looking for individual person
+##use DESeqDataSetFromMatrix
+deseq<-DESeqDataSetFromMatrix(countData=luad_matrix, 
+                            colData=coldata,
+                            design=~1)
+
+deseq
+##this is a count
+
+##then we gotta remove those insigificant ones
+##remove those with less than 10 reads. Keep those with 10 reads or above
+##also now it is row
+keep<-rowSums(counts(deseq))>= 10
+new_deseq<-deseq[keep,]
+
+##still talking about individual person
+##vst continued
+
+vsd<-vst(deseq, blind=FALSE)
+luad_matrix_vst<-assay(vsd)
+
+```
+
+```{r}
+##get data for AIM2 gene and put gene metadata info on it
+##that is combine matrix (individual) and gene metadata
+##convert luad_matrix into dataframe
+##IIRC gene_metadata gene id was row change to column
+##change gene_id 
+##gather is to simplify the data only now gonna contain
+##three columns gene_id, case_id, counts
+##- gene_id because we already dealt with it in the previous line
+##left_join to merge "." is for previous and then combine gene_metadata, by=gene_id because those share commonality in
+##gene_id
+#filter for AIM2 finally
+luad_aim2 <- luad_matrix_vst %>%
+  as.data.frame() %>%
+  rownames_to_column(var = 'gene_id') %>%
+  gather(key = 'case_id', value = 'counts', -gene_id) %>%
+  left_join(., gene_metadata, by = "gene_id") %>%
+  filter(gene_name == "AIM2")
+
+
+```
+
+
+```{r}
+##just gonna keep it simple and use median value to 
+##separate the group into high and low expressing group
+
+median_value<-median(luad_aim2$counts)
+
+luad_aim2$level<-ifelse(luad_aim2$counts >= median_value, "HIGH", "LOW")
+```
+
+
+```{r}
+##now we have all three info that we need
+##we got time we got status dead or alive and we also 
+##have AIM2 low or high level. 
+## now we can create the curve
+
+##former two are in the clinical data 
+##while the latter is in the luad. We gotta combine the two
+##we can merge the two by combining submittred id of the clinical with case id of AIM2 although latter has to be shortened to match the former
+
+luad_aim2$case_id<-gsub('-01.*', '',luad_aim2$case_id)
+luad_aim2<-merge(luad_aim2, luad, by.x='case_id', by.y='submitter_id')
+##x here is obviously our matrix, y is the clinical
+
+```
+
+```{r}
+
+##fitting survival curve
+##data is luad_aim2 matrix
+##surv, status is whereby we made those that dropped out alive
+##and dead is whereby we made true and false for all
+##level is the one from median
+
+##status comes first because you ned to be numeric the first argument
+##level would be the event dead alive that sort of thing goes third
+curve<-survfit(Surv(status, dead) ~ level, data=luad_aim2)
+
+curve
+
+ggsurvplot(curve, data=luad_aim2)
+
+##you can also do survdiff
+##status is the one that made those that dropped out alive
+##dead is the one that made true and false
+##level is the event median value
+curve2<-survdiff(Surv(status, dead) ~ level, data=luad_aim2)
+
+curve2
+
+```
+

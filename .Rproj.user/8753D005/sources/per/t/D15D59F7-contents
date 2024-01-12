@@ -1,0 +1,79 @@
+---
+title: "TCGA"
+format: pdf
+Author: Arisachi Tanaka
+---
+
+```{r}
+##loaded'em up using library
+library(TCGAbiolinks)
+library(tidyverse)
+library(maftools)
+library(pheatmap)
+library(SummarizedExperiment)
+library(survminer)
+library(survival)
+
+##overview of all the projects
+
+proj<-getGDCprojects()
+##gives you overview summary of each of the specific project
+getProjectSummary('TCGA-LUAD')
+
+##getting clinical data for TCGA-LUAD
+##which column has these characteristics we want
+luad<-GDCquery_clinic("TCGA-LUAD")
+any(colnames(luad)%in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+
+which(colnames(luad)%in% c("vital_status", "days_to_last_follow_up", "days_to_death"))
+
+```
+
+
+```{r}
+##display those columns??
+luad[,c(9,40,46)]
+##use table to identify how many is alive and dead
+table(luad$vital_status)
+
+
+
+```
+
+```{r}
+luad$dead<-ifelse(luad$vital_status=="Alive", FALSE, TRUE)
+
+
+table(luad$dead)
+
+luad$status<-ifelse(luad$vital_status=="Alive", luad$days_to_last_follow_up, luad$days_to_death)
+
+
+```
+
+```{r}
+luad_query=GDCquery(project = "TCGA-LUAD", data.category="Transcriptome Profiling", experimental.strategy="RNA-Seq", workflow.type="STAR - Counts", data.type="Gene Expression Quantification", access="open", sample.type="Primary Tumor")
+
+luad_output<-getResults(luad_query)
+
+GDCdownload(luad_query)
+
+
+```
+
+
+
+```{r}
+luad_data<-GDCprepare(luad_query, summarizedExperiment = TRUE)
+
+luad_matrix<-assay(luad_data, "unstranded")
+
+luad_matrix
+```
+
+```{r}
+gene_metadata<-as.data.frame(rowData(luad_data))
+coldata<-as.data.frame(colData(luad_data))
+
+```
+
